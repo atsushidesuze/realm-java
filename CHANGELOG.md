@@ -1,3 +1,9 @@
+## 0.91.0
+
+### Bug fixes
+
+* added null check to `addChangeListener` and `removeChangeListener` in `Realm` and `DynamicRealm` (#2772).
+
 ## 0.90.1
 
 * Updated Realm Core to 0.100.2.
