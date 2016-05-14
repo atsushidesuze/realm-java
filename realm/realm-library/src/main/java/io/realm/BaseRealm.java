@@ -22,6 +22,7 @@ import android.os.Looper;
 import java.io.Closeable;
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -66,6 +67,7 @@ abstract class BaseRealm implements Closeable {
     RealmSchema schema;
     Handler handler;
     HandlerController handlerController;
+    List<Runnable> asyncTransactionCallbacks = new ArrayList<Runnable>();
 
     static {
         RealmLog.add(BuildConfig.DEBUG ? new DebugAndroidLogger() : new ReleaseAndroidLogger());
@@ -458,6 +460,11 @@ abstract class BaseRealm implements Closeable {
      * Closes the Realm instances and all its resources without checking the {@link RealmCache}.
      */
     void doClose() {
+        if (asyncTaskExecutor.hasPendingTransactions() || !asyncTransactionCallbacks.isEmpty()) {
+            String canonicalPath = getPath();
+            RealmLog.w("Realm " + canonicalPath + " will be closed with pending async transactions or callbacks.");
+        }
+
         if (sharedGroupManager != null) {
             sharedGroupManager.close();
             sharedGroupManager = null;

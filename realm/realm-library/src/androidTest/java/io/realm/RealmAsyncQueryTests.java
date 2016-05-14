@@ -194,7 +194,7 @@ public class RealmAsyncQueryTests {
             @Override
             public void onError(Throwable error) {
                 // Ensure we are giving developers quality messages in the logs.
-                assertEquals("Could not cancel transaction, not currently in a transaction.", testLogger.message);
+                assertEquals("Could not cancel transaction, not currently in a transaction.", testLogger.previousMessage);
                 RealmLog.remove(testLogger);
                 looperThread.testComplete();
             }
@@ -279,6 +279,88 @@ public class RealmAsyncQueryTests {
                 throw new RuntimeException("Dummy exception");
             }
         }, transactionCallback);
+    }
+
+    // Test case for https://github.com/realm/realm-java/issues/1893
+    // Ensure that onSuccess is called with the correct Realm version for async transaction.
+    @Test
+    @RunTestInLooperThread
+    public void executeTransactionAsync_asyncQuery() {
+        final Realm realm = looperThread.realm;
+        RealmResults<AllTypes> results = realm.where(AllTypes.class).findAllAsync();
+        assertEquals(0, results.size());
+
+        realm.executeTransactionAsync(new Realm.Transaction() {
+            @Override
+            public void execute(Realm realm) {
+                realm.createObject(AllTypes.class);
+            }
+        }, new Realm.Transaction.OnSuccess() {
+            @Override
+            public void onSuccess() {
+                assertEquals(realm.where(AllTypes.class).count(), 1);
+                looperThread.testComplete();
+            }
+        }, new Realm.Transaction.OnError() {
+            @Override
+            public void onError(Throwable error) {
+                fail();
+            }
+        });
+    }
+
+    // Test case for https://github.com/realm/realm-java/issues/1893
+    // Ensure that Realm.close() logs a warning if you close a Realm with pending transactions.
+    @Test
+    @UiThreadTest
+    public void executeTransactionAsync_closeWithPendingTransaction() throws NoSuchFieldException, IllegalAccessException {
+        RealmConfiguration config = configFactory.createConfiguration();
+        Realm realm = Realm.getInstance(config);
+
+        final CountDownLatch closeLatch = new CountDownLatch(1);
+        final CountDownLatch waitAsyncTransaction = new CountDownLatch(1);
+
+        realm.executeTransactionAsync(new Realm.Transaction() {
+            @Override
+            public void execute(Realm realm) {
+                TestHelper.awaitOrFail(closeLatch);
+                realm.close(); // It is for avoiding java.lang.IllegalStateException: It's not allowed to delete the file associated with an open Realm.
+                waitAsyncTransaction.countDown();
+            }
+        });
+
+        final TestHelper.TestLogger testLogger = new TestHelper.TestLogger();
+        RealmLog.add(testLogger);
+        realm.close();
+        RealmLog.remove(testLogger);
+        String[] logs = testLogger.message.split("will ");
+        assertEquals("be closed with pending async transactions or callbacks.", logs[1]);
+
+        closeLatch.countDown();
+        TestHelper.awaitOrFail(waitAsyncTransaction);
+    }
+
+    // Test case for https://github.com/realm/realm-java/issues/1893
+    // Ensure that Realm.close() logs a warning if you close a Realm with pending callbacks.
+    @Test
+    @UiThreadTest
+    public void executeTransactionAsync_closeWithPendingTransactionCallback() {
+        RealmConfiguration config = configFactory.createConfiguration();
+        Realm realm = Realm.getInstance(config);
+
+        realm.asyncTransactionCallbacks.add(new Runnable() {
+            @Override
+            public void run() {
+            }
+        });
+
+        final TestHelper.TestLogger testLogger = new TestHelper.TestLogger();
+        RealmLog.add(testLogger);
+        realm.close();
+        RealmLog.remove(testLogger);
+
+        String[] logs = testLogger.message.split("will ");
+        assertEquals("be closed with pending async transactions or callbacks.", logs[1]);
     }
 
     // ************************************
@@ -1948,7 +2030,7 @@ public class RealmAsyncQueryTests {
         // 3. The async query should now (hopefully) fail with a BadVersion
         result.load();
     }
-    
+
     // handlerController#emptyAsyncRealmObject is accessed from different threads
     // make sure that we iterate over it safely without any race condition (ConcurrentModification)
     @Test
@@ -2004,7 +2086,7 @@ public class RealmAsyncQueryTests {
     @Test
     @UiThreadTest
     public void concurrentModificationRealmObjects() {
-        RealmConfiguration config = configFactory.createConfiguration();
+        RealmConfiguration config  = configFactory.createConfiguration();
         final Realm realm = Realm.getInstance(config);
         Dog dog1 = new Dog();
         dog1.setName("Dog 1");
@@ -2017,8 +2099,8 @@ public class RealmAsyncQueryTests {
         dog2 = realm.copyToRealm(dog2);
         realm.commitTransaction();
 
-        final WeakReference<RealmObjectProxy> weakReference1 = new WeakReference<RealmObjectProxy>((RealmObjectProxy) dog1);
-        final WeakReference<RealmObjectProxy> weakReference2 = new WeakReference<RealmObjectProxy>((RealmObjectProxy) dog2);
+        final WeakReference<RealmObjectProxy> weakReference1 = new WeakReference<RealmObjectProxy>((RealmObjectProxy)dog1);
+        final WeakReference<RealmObjectProxy> weakReference2 = new WeakReference<RealmObjectProxy>((RealmObjectProxy)dog2);
 
         realm.handlerController.realmObjects.put(weakReference1, Boolean.TRUE);
 
@@ -2043,36 +2125,6 @@ public class RealmAsyncQueryTests {
         }
 
         realm.close();
-    }
-
-    @Test
-    @RunTestInLooperThread
-    public void testAsyncTransactionWorksWithAsyncQuery() {
-        RealmResults<AllTypes> results = looperThread.realm.where(AllTypes.class).findAllAsync();
-        results.addChangeListener(new RealmChangeListener() {
-            @Override
-            public void onChange() {
-                //assertEquals(looperThread.realm.where(AllTypes.class).count(), 1);
-            }
-        });
-        looperThread.keepStrongReference.add(results);
-        looperThread.realm.executeTransactionAsync(new Realm.Transaction() {
-            @Override
-            public void execute(Realm realm) {
-                realm.createObject(AllTypes.class);
-            }
-        }, new Realm.Transaction.OnSuccess() {
-            @Override
-            public void onSuccess() {
-                assertEquals(looperThread.realm.where(AllTypes.class).count(), 1);
-                looperThread.testComplete();
-            }
-        }, new Realm.Transaction.OnError() {
-            @Override
-            public void onError(Throwable error) {
-                fail();
-            }
-        });
     }
 
     // *** Helper methods ***
